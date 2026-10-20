@@ -766,10 +766,15 @@ app.ticker.add((ticker) => {
     pos.x+=(p.x-pos.x)*follow;pos.y+=(p.y-pos.y)*follow;
     visual.body.position.set(pos.x,pos.y);
     // Server-owned drone counts; each drone uses the same static type texture.
+    // Interleave owned drone types, so mixed IRIS/FLAX fleets appear on both wings.
+    // Counts remain sourced from the server; this is presentation only.
+    const irisCount=Math.max(0,Math.min(8,p.drones?.iris??(p.id===myId?profile?.drones?.iris??0:0)));
+    const flaxCount=Math.max(0,Math.min(8,p.drones?.flax??(p.id===myId?profile?.drones?.flax??0:0)));
     const droneList:('iris'|'flax')[]=[];
-    for(const type of ['iris','flax'] as const){
-      const count=Math.max(0,Math.min(8,p.drones?.[type]??(p.id===myId?profile?.drones?.[type]??0:0)));
-      for(let i=0;i<count;i++)droneList.push(type);
+    let remainingIris=irisCount,remainingFlax=flaxCount;
+    while(remainingIris>0||remainingFlax>0){
+      if(remainingIris>0){droneList.push('iris');remainingIris--;}
+      if(remainingFlax>0){droneList.push('flax');remainingFlax--;}
     }
     const wantedDrones=prefs.drones?droneList.length:(droneList.length?1:0);
     const wantedLabels=prefs.drones?droneList:['hidden-'+droneList.join('')];
@@ -789,7 +794,7 @@ app.ticker.add((ticker) => {
         sprite.scale.set(factor);drone.addChild(sprite);visual.drones.addChild(drone);
       }
     }
-    // Balanced two-wing Standard Formation, attached to the smoothed ship body.
+    // Symmetric, swept-back Standard Formation attached to the smoothed ship body.
     // Slot positions never orbit or rotate; IRIS and FLAX art stays identical.
     if(prefs.drones){
       const total=visual.drones.children.length;
@@ -800,9 +805,9 @@ app.ticker.add((ticker) => {
         const slot=Math.floor(i/2);
         const sideCount=left?leftCount:rightCount;
         const u=(slot+1)/(sideCount+1);
-        const distance=85+slot*31;
+        const distance=78+slot*31;
         const x=(left?-1:1)*distance;
-        const y=-30-34*Math.sin(u*Math.PI)+slot*10;
+        const y=16+slot*13-10*Math.sin(u*Math.PI);
         const drone=visual.drones.children[i];
         drone.position.set(x,y);drone.alpha=1;drone.scale.set(1);
       }
