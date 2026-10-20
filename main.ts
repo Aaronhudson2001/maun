@@ -451,11 +451,11 @@ let cameraX=NaN, cameraY=NaN;
 
 const visuals = new Map<string, { drones:Container; body: Container; label: Text; art: Container; nameplate: Container; ringTexts:Text[]; faction:Sprite; title:Text; exhaust:Container; flame:Graphics; glow:Graphics }>();
 const starfighterTexture=await Assets.load('/assets/starfighter.png');
-// Original bitmap frames extracted from the supplied drones2.swf.
-// Each 32-frame bank contains four eight-direction rotations.
+// v1.6.5: one static artwork frame per type. No animation or directional swaps.
+// These URLs refer to client/public/assets/drones/swf/ in the local Vite project.
 const droneTextures={
-  iris:await Promise.all(Array.from({length:32},(_,i)=>Assets.load(`/assets/drones/swf/iris-${String(i).padStart(2,'0')}.png`))),
-  flax:await Promise.all(Array.from({length:32},(_,i)=>Assets.load(`/assets/drones/swf/flax-${String(i).padStart(2,'0')}.png`)))
+  iris:await Assets.load('/assets/drones/swf/iris-00.png'),
+  flax:await Assets.load('/assets/drones/swf/flax-00.png')
 };
 const droneLoadout=()=>{try{const x=JSON.parse(localStorage.getItem('orbit-drone-loadout')||'null');if(x&&['iris','flax'].includes(x.type))return {type:x.type as 'iris'|'flax',count:Math.max(0,Math.min(8,Number(x.count)||0)),level:Math.max(1,Math.min(6,Number(x.level)||1))};}catch{}return {type:'iris' as const,count:0,level:1};};
 const makePhoenixCustom=()=>{
@@ -765,48 +765,47 @@ app.ticker.add((ticker) => {
     // Exponential smoothing is framerate independent, including at 144Hz.
     pos.x+=(p.x-pos.x)*follow;pos.y+=(p.y-pos.y)*follow;
     visual.body.position.set(pos.x,pos.y);
-    // Server-owned drones are rendered for every player; XP is granted on NPC kills.
-    const droneList:string[]=[];for(const type of ['iris','flax'] as const)for(let i=0;i<(p.drones?.[type]??(p.id===myId?profile?.drones?.[type]??0:0));i++)droneList.push(`${type}-${Math.max(1,Math.min(6,p.droneLevels?.[type]?.[i]??(p.id===myId?Math.min(6,1+Math.floor((profile?.droneXp?.[type]?.[i]??0)/10000)):1)))}`);const wantedDrones=prefs.drones?droneList.length:(droneList.length?1:0);
-    if(visual.drones.children.length!==wantedDrones || visual.drones.children.some((child,i)=>child.label!==(prefs.drones?droneList[i]:'hidden-'+droneList.join('')))){
+    // Server-owned drone counts; each drone uses the same static type texture.
+    const droneList:('iris'|'flax')[]=[];
+    for(const type of ['iris','flax'] as const){
+      const count=Math.max(0,Math.min(8,p.drones?.[type]??(p.id===myId?profile?.drones?.[type]??0:0)));
+      for(let i=0;i<count;i++)droneList.push(type);
+    }
+    const wantedDrones=prefs.drones?droneList.length:(droneList.length?1:0);
+    const wantedLabels=prefs.drones?droneList:['hidden-'+droneList.join('')];
+    if(visual.drones.children.length!==wantedDrones || visual.drones.children.some((child,i)=>child.label!==wantedLabels[i])){
       visual.drones.removeChildren().forEach(child=>child.destroy({children:true}));
-      if(!prefs.drones && droneList.length){const indicator=new Container();indicator.label='hidden-'+droneList.join('');const letters=new Text({text:droneList.map(d=>d.startsWith('iris')?'I':'F').join(''),style:{fontFamily:'Arial',fontSize:15,fontWeight:'bold',fill:0xffd700,stroke:{color:0x09131d,width:2}}});letters.anchor.set(.5);indicator.addChild(letters);indicator.position.set(0,-70);visual.drones.addChild(indicator);}
-      for(let i=0;i<(prefs.drones?wantedDrones:0);i++){
-        const drone=new Container();const [droneType,droneLevel]=droneList[i].split('-') as ['iris'|'flax',string];drone.label=droneList[i];
-        const sprite=new Sprite(droneTextures[droneType][0]);sprite.label='swf-drone-art';sprite.anchor.set(.5);sprite.width=40;sprite.height=40;drone.addChild(sprite);
-        visual.drones.addChild(drone);
+      if(!prefs.drones && droneList.length){
+        const indicator=new Container();indicator.label=wantedLabels[0];
+        const letters=new Text({text:droneList.map(type=>type==='iris'?'I':'F').join(''),style:{fontFamily:'Arial',fontSize:13,fontWeight:'bold',fill:0xffd700,stroke:{color:0x09131d,width:2}}});
+        letters.anchor.set(.5);letters.scale.x=0.85;indicator.addChild(letters);
+        indicator.position.set(0,-70);visual.drones.addChild(indicator);
+      }
+      if(prefs.drones)for(const type of droneList){
+        const drone=new Container();drone.label=type;
+        const sprite=new Sprite(droneTextures[type]);sprite.label='static-drone-art';sprite.anchor.set(.5);
+        // Keep natural sprite proportions instead of stretching both types to a square.
+        const factor=Math.min(42/Math.max(1,sprite.texture.width),42/Math.max(1,sprite.texture.height));
+        sprite.scale.set(factor);drone.addChild(sprite);visual.drones.addChild(drone);
       }
     }
-    // Classic standard formation: drones spread along two broad, sweeping wings.
-    // This is not a tight ring; each side has its own stable slot and the
-    // formation moves with the player. A small periodic sway keeps it alive.
+    // Balanced two-wing Standard Formation, attached to the smoothed ship body.
+    // Slot positions never orbit or rotate; IRIS and FLAX art stays identical.
     if(prefs.drones){
       const total=visual.drones.children.length;
-      const t=performance.now()*0.001;
       const leftCount=Math.ceil(total/2);
       const rightCount=total-leftCount;
       for(let i=0;i<total;i++){
-        const left=i<leftCount;
-        const slot=left?i:i-leftCount;
+        const left=i%2===0;
+        const slot=Math.floor(i/2);
         const sideCount=left?leftCount:rightCount;
         const u=(slot+1)/(sideCount+1);
-        // Outward sweeping wings with plenty of clearance from the hull.
-        const distance=82+slot*27;
+        const distance=85+slot*31;
         const x=(left?-1:1)*distance;
-        const y=-29-30*Math.sin(u*Math.PI)+slot*8;
+        const y=-30-34*Math.sin(u*Math.PI)+slot*10;
         const drone=visual.drones.children[i];
-        drone.position.set(x+Math.sin(t*0.85+slot*0.6+(left?0:1))*3,y+Math.cos(t*0.7+slot*0.7)*4);
-        drone.alpha=1;
-        drone.scale.set(0.92);
-        drone.zIndex=20;
-        const art=drone.children[0];
-        if(art instanceof Sprite){
-          const kind=drone.label.startsWith('flax')?'flax':'iris';
-          // Directional SWF bitmap frame cycling; preserve the original art.
-          const frame=(Math.floor((t*2+slot*0.45)%4)*8+(left?2:6))%32;
-          art.texture=droneTextures[kind][frame];
-        }
+        drone.position.set(x,y);drone.alpha=1;drone.scale.set(1);
       }
-      visual.drones.sortableChildren=true;
     }
 
     // Aim using the server's actual travel vector. Snapshot target coordinates
